@@ -2,11 +2,11 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Twilio Browser Receiver</title>
+  <title>Twilio Browser Receiver (v2)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     body{font-family:system-ui,Segoe UI,Roboto,Arial;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f6f8fa;}
-    .card{background:#fff;padding:24px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,0.08);width:360px;text-align:center;}
+    .card{background:#fff;padding:22px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,0.08);width:380px;text-align:center;}
     button{padding:10px 16px;border-radius:8px;border:none;background:#0b74de;color:#fff;font-weight:600;cursor:pointer;}
     #status{margin:12px 0;color:#333;}
     #incoming{display:none;margin-top:12px;}
@@ -14,14 +14,19 @@
     .small{font-size:13px;color:#666;}
   </style>
 
-  <!-- Stable Twilio Client SDK (programmable-voice / Twilio.Device) -->
-  <script src="https://unpkg.com/@twilio/voice-sdk@2.16.0/dist/twilio.min.js"></script>
+  <!-- Twilio Voice JS SDK v2 from jsDeliver CDN (keeps you on the supported v2.x branch) -->
+  <script src="https://cdn.jsdelivr.net/npm/@twilio/voice-sdk@latest/dist/twilio-voice.min.js"></script>
 </head>
 <body>
   <div class="card">
-    <h2>Twilio Browser Receiver</h2>
-    <div id="status">Initializing…</div>
-    <div class="small">Open this page and keep it active. Incoming calls to your Twilio number will ring here.</div>
+    <h2>Twilio Browser Receiver (v2)</h2>
+
+    <div id="status">Click <strong>Enable calls</strong> to allow microphone & register device.</div>
+    <div style="margin:10px 0">
+      <button id="startBtn">Enable calls</button>
+    </div>
+
+    <div class="small">Keep this tab open. Incoming calls to your Twilio number will ring here.</div>
 
     <div id="incoming">
       <p><strong id="fromLabel">Incoming call</strong></p>
@@ -37,98 +42,130 @@
   </div>
 
   <script>
-    let device = null;
-    let currentConnection = null;
+    // Use the Device class exported by the v2 SDK
+    const DeviceClass = window.Twilio && window.Twilio.Device;
+    if (!DeviceClass) {
+      document.getElementById('status').innerText = 'Twilio Voice SDK failed to load. Check CDN.';
+      console.error('Twilio Voice SDK not found on window.Twilio.Device');
+    }
+
+    let device = null;        // Device instance (v2)
+    let activeCall = null;    // Call object
     let isMuted = false;
 
-    function updateStatus(txt) { document.getElementById('status').innerText = txt; }
+    function setStatus(txt) { document.getElementById('status').innerText = txt; }
 
-    async function init() {
-      updateStatus('Requesting token from server…');
+    async function fetchToken() {
+      const res = await fetch('/token');
+      if (!res.ok) {
+        const body = await res.json().catch(()=>({error:'unknown'}));
+        throw new Error(body && body.error ? body.error : 'Failed fetching token');
+      }
+      const j = await res.json();
+      return j.token;
+    }
+
+    async function startDevice() {
+      setStatus('Requesting access token…');
       try {
-        const res = await fetch('/token');
-        const data = await res.json();
-        if (!data.token) throw new Error(data.error || 'No token returned from server');
+        const token = await fetchToken();
 
-        // Use Twilio.Device.setup for broad SDK compatibility
-        Twilio.Device.setup(data.token);
+        // Create device instance (v2 style)
+        device = new DeviceClass(token);
 
-        // Events
-        Twilio.Device.ready(function(deviceInfo) {
-          device = Twilio.Device;
-          updateStatus('Ready — waiting for calls. (identity: ' + (data.identity || 'browser') + ')');
+        // Register listeners with the new event API
+        device.on('registered', () => {
+          setStatus('Ready — waiting for calls.');
+          document.getElementById('startBtn').style.display = 'none';
         });
 
-        Twilio.Device.error(function(err) {
-          updateStatus('Device error: ' + (err && err.message ? err.message : err));
-          console.error('Twilio Device error:', err);
+        device.on('registrationError', (err) => {
+          setStatus('Registration error: ' + (err && err.message ? err.message : err));
+          console.error('registrationError', err);
         });
 
-        Twilio.Device.connect(function(conn) {
-          // outgoing or connected event
-          currentConnection = conn;
-          updateStatus('Call connected');
-          isMuted = false;
+        device.on('unregistered', () => {
+          setStatus('Device unregistered');
+          document.getElementById('startBtn').style.display = '';
         });
 
-        Twilio.Device.disconnect(function(conn) {
-          currentConnection = null;
-          updateStatus('Call disconnected');
-        });
-
-        Twilio.Device.incoming(function(conn) {
-          currentConnection = conn;
-          const from = conn.parameters && conn.parameters.From ? conn.parameters.From : 'Unknown';
+        // Incoming call
+        device.on('incoming', (call) => {
+          activeCall = call;
+          const from = call.parameters && call.parameters.From ? call.parameters.From : 'Unknown';
           document.getElementById('fromLabel').innerText = 'Incoming call from ' + from;
           document.getElementById('incoming').style.display = 'block';
-          updateStatus('Incoming call from ' + from);
+          setStatus('Incoming call from ' + from);
+
+          // listen for call end
+          call.on('disconnected', () => {
+            setStatus('Call disconnected');
+            document.getElementById('incoming').style.display = 'none';
+            activeCall = null;
+            isMuted = false;
+          });
+
+          call.on('connected', () => {
+            setStatus('Call connected');
+          });
+
+          call.on('failed', (err) => {
+            setStatus('Call failed: ' + (err && err.message ? err.message : err));
+            console.error('call failed', err);
+          });
         });
 
+        // Register the device to allow incoming (this triggers permission prompts)
+        // For v2, Device.register() is the method to enable incoming calls
+        await device.register();
       } catch (err) {
-        updateStatus('Initialization error: ' + (err && err.message ? err.message : err));
         console.error(err);
+        setStatus('Initialization error: ' + (err && err.message ? err.message : err));
       }
     }
 
-    document.getElementById('answer').addEventListener('click', function() {
-      if (!currentConnection) return;
+    // Buttons
+    document.getElementById('startBtn').addEventListener('click', async () => {
+      // Must be user gesture — starts AudioContext / mic permission
+      await startDevice();
+    });
+
+    document.getElementById('answer').addEventListener('click', async () => {
+      if (!activeCall) return;
       try {
-        currentConnection.accept();
-        updateStatus('Call answered');
+        await activeCall.accept();
+        setStatus('Call answered');
         document.getElementById('incoming').style.display = 'none';
       } catch (e) {
-        console.error('Answer failed:', e);
+        console.error('Answer failed', e);
       }
     });
 
-    document.getElementById('reject').addEventListener('click', function() {
-      if (!currentConnection) return;
+    document.getElementById('reject').addEventListener('click', () => {
+      if (!activeCall) return;
       try {
-        currentConnection.reject();
-        updateStatus('Call rejected');
+        activeCall.reject();
+        setStatus('Call rejected');
         document.getElementById('incoming').style.display = 'none';
-        currentConnection = null;
+        activeCall = null;
       } catch (e) {
-        console.error('Reject failed:', e);
+        console.error('Reject failed', e);
       }
     });
 
-    document.getElementById('muteToggle').addEventListener('click', function() {
-      if (!currentConnection) {
-        updateStatus('No active call to mute/unmute');
+    document.getElementById('muteToggle').addEventListener('click', () => {
+      if (!activeCall) {
+        setStatus('No active call to mute/unmute');
         return;
       }
       try {
         isMuted = !isMuted;
-        currentConnection.mute(isMuted);
-        updateStatus(isMuted ? 'Muted' : 'Unmuted');
+        activeCall.mute(isMuted);
+        setStatus(isMuted ? 'Muted' : 'Unmuted');
       } catch (e) {
-        console.error('Mute toggle failed:', e);
+        console.error('Mute toggle failed', e);
       }
     });
-
-    // start
-    init();
   </script>
 </body>
 </html>
