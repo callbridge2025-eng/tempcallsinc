@@ -2,24 +2,25 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Twilio Browser Receiver (v2)</title>
+  <title>Twilio Browser Receiver (auto-detect)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     body{font-family:system-ui,Segoe UI,Roboto,Arial;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f6f8fa;}
-    .card{background:#fff;padding:22px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,0.08);width:380px;text-align:center;}
+    .card{background:#fff;padding:22px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,0.08);width:420px;text-align:center;}
     button{padding:10px 16px;border-radius:8px;border:none;background:#0b74de;color:#fff;font-weight:600;cursor:pointer;}
     #status{margin:12px 0;color:#333;}
     #incoming{display:none;margin-top:12px;}
     #answer, #reject{margin:6px;}
     .small{font-size:13px;color:#666;}
+    pre {text-align:left; margin:8px 0; max-height:180px; overflow:auto; background:#f0f3f6; padding:8px; border-radius:6px;}
   </style>
 
-  <!-- Twilio Voice JS SDK v2 from jsDeliver CDN (keeps you on the supported v2.x branch) -->
-  <script src="https://cdn.jsdelivr.net/npm/@twilio/voice-sdk@latest/dist/twilio-voice.min.js"></script>
+  <!-- User-provided CDN (you said you use this) -->
+  <script src="https://unpkg.com/@twilio/voice-sdk@2.16.0/dist/twilio.min.js"></script>
 </head>
 <body>
   <div class="card">
-    <h2>Twilio Browser Receiver (v2)</h2>
+    <h2>Twilio Browser Receiver</h2>
 
     <div id="status">Click <strong>Enable calls</strong> to allow microphone & register device.</div>
     <div style="margin:10px 0">
@@ -39,94 +40,183 @@
     <div style="margin-top:14px">
       <button id="muteToggle">Mute</button>
     </div>
+
+    <div style="margin-top:12px">
+      <details><summary>Debug: detected Twilio global (open this and check console)</summary>
+        <pre id="twilioDebug">(not loaded yet)</pre>
+      </details>
+    </div>
   </div>
 
   <script>
-    // Use the Device class exported by the v2 SDK
-    const DeviceClass = window.Twilio && window.Twilio.Device;
-    if (!DeviceClass) {
-      document.getElementById('status').innerText = 'Twilio Voice SDK failed to load. Check CDN.';
-      console.error('Twilio Voice SDK not found on window.Twilio.Device');
+    // Debug helper: detect Twilio export shape and find a Device constructor.
+    function detectTwilioDeviceConstructor() {
+      // Common global names that different bundles expose
+      const candidates = [
+        window.Twilio,
+        window.TwilioVoice,
+        window.TwilioVoiceSDK,
+        window.TwilioClient,
+        window.default,              // unlikely
+        (window.Twilio && window.Twilio.default), // some UMD builds
+        (window.Twilio && window.Twilio.Device),
+        (window.Twilio && window.Twilio.Device && window.Twilio.Device.Device)
+      ];
+
+      // Collect a map of keys available on window for easier debugging
+      const twilioGlobal = window.Twilio || window.TwilioVoice || window.TwilioVoiceSDK || window.TwilioClient || window.Twilio || null;
+
+      // Helper to test an object for a Device-like constructor
+      function looksLikeConstructor(fn) {
+        return typeof fn === 'function';
+      }
+
+      // Try a list of likely access paths
+      const accessPaths = [
+        ['window.Twilio', window.Twilio],
+        ['window.Twilio && window.Twilio.Device', (window.Twilio && window.Twilio.Device)],
+        ['window.Twilio.default', (window.Twilio && window.Twilio.default)],
+        ['window.Twilio.default.Device', (window.Twilio && window.Twilio.default && window.Twilio.default.Device)],
+        ['window.TwilioVoice', window.TwilioVoice],
+        ['window.TwilioVoice.Device', (window.TwilioVoice && window.TwilioVoice.Device)],
+        ['window.TwilioVoice.default', (window.TwilioVoice && window.TwilioVoice.default)],
+        ['window.TwilioVoice.default.Device', (window.TwilioVoice && window.TwilioVoice.default && window.TwilioVoice.default.Device)],
+        ['window["@twilio/voice-sdk"] (rare)', window['@twilio/voice-sdk']]
+      ];
+
+      // Check each path
+      for (const [path, val] of accessPaths) {
+        if (looksLikeConstructor(val)) {
+          return { constructor: val, path, twilioGlobalSnapshot: snapshot(twilioGlobal) };
+        }
+        // sometimes Device is a property on the object
+        if (val && typeof val === 'object') {
+          // try .Device
+          if (looksLikeConstructor(val.Device)) return { constructor: val.Device, path: path + '.Device', twilioGlobalSnapshot: snapshot(twilioGlobal) };
+          // try default property
+          if (looksLikeConstructor(val.default)) return { constructor: val.default, path: path + '.default', twilioGlobalSnapshot: snapshot(twilioGlobal) };
+          if (val.default && typeof val.default === 'object' && looksLikeConstructor(val.default.Device)) {
+            return { constructor: val.default.Device, path: path + '.default.Device', twilioGlobalSnapshot: snapshot(twilioGlobal) };
+          }
+        }
+      }
+
+      // nothing found — return a descriptive object
+      return { constructor: null, path: null, twilioGlobalSnapshot: snapshot(twilioGlobal) };
+
+      function snapshot(obj) {
+        if (!obj) return null;
+        try {
+          // list keys, but not deep values
+          return Object.keys(obj).slice(0,50);
+        } catch (e) {
+          return String(obj);
+        }
+      }
     }
 
-    let device = null;        // Device instance (v2)
-    let activeCall = null;    // Call object
-    let isMuted = false;
+    // UI refs
+    const startBtn = document.getElementById('startBtn');
+    const incomingBox = document.getElementById('incoming');
+    const fromLabel = document.getElementById('fromLabel');
+    const statusEl = document.getElementById('status');
+    const debugPre = document.getElementById('twilioDebug');
 
-    function setStatus(txt) { document.getElementById('status').innerText = txt; }
+    let device = null;
+    let activeCall = null;
+    let muted = false;
+
+    function setStatus(t) { statusEl.innerText = t; }
 
     async function fetchToken() {
       const res = await fetch('/token');
       if (!res.ok) {
-        const body = await res.json().catch(()=>({error:'unknown'}));
-        throw new Error(body && body.error ? body.error : 'Failed fetching token');
+        const b = await res.json().catch(()=>({ error: 'unknown' }));
+        throw new Error(b.error || 'Failed to fetch token');
       }
       const j = await res.json();
       return j.token;
     }
 
     async function startDevice() {
-      setStatus('Requesting access token…');
+      setStatus('Fetching token…');
       try {
         const token = await fetchToken();
 
-        // Create device instance (v2 style)
-        device = new DeviceClass(token);
+        // Detect constructor
+        const detected = detectTwilioDeviceConstructor();
+        console.log('Detected Twilio global:', detected.twilioGlobalSnapshot, 'chosen path:', detected.path);
+        debugPre.innerText = 'Detected global keys: ' + JSON.stringify(detected.twilioGlobalSnapshot, null, 0) + '\nChosen path: ' + String(detected.path);
 
-        // Register listeners with the new event API
-        device.on('registered', () => {
+        if (!detected.constructor) {
+          setStatus('Twilio SDK loaded but Device constructor not found. See console for details.');
+          console.error('Twilio SDK loaded but could not find Device constructor. Snapshot:', detected.twilioGlobalSnapshot);
+          return;
+        }
+
+        const DeviceCtor = detected.constructor;
+        // Create device instance (v2 usage: new Device(token))
+        try {
+          device = new DeviceCtor(token);
+        } catch (ctorErr) {
+          console.error('Failed constructing Device with detected constructor. Constructor type:', typeof DeviceCtor, DeviceCtor);
+          setStatus('Failed to create Device — constructor invocation threw an error (see console).');
+          return;
+        }
+
+        // Register event listeners (v2 style)
+        device.on && device.on('registered', () => {
           setStatus('Ready — waiting for calls.');
-          document.getElementById('startBtn').style.display = 'none';
+          startBtn.style.display = 'none';
         });
 
-        device.on('registrationError', (err) => {
-          setStatus('Registration error: ' + (err && err.message ? err.message : err));
+        device.on && device.on('registrationError', (err) => {
           console.error('registrationError', err);
+          setStatus('Registration error: ' + (err && err.message ? err.message : String(err)));
         });
 
-        device.on('unregistered', () => {
+        device.on && device.on('unregistered', () => {
           setStatus('Device unregistered');
-          document.getElementById('startBtn').style.display = '';
+          startBtn.style.display = '';
         });
 
-        // Incoming call
-        device.on('incoming', (call) => {
+        device.on && device.on('incoming', (call) => {
           activeCall = call;
           const from = call.parameters && call.parameters.From ? call.parameters.From : 'Unknown';
-          document.getElementById('fromLabel').innerText = 'Incoming call from ' + from;
-          document.getElementById('incoming').style.display = 'block';
+          fromLabel.innerText = 'Incoming call from ' + from;
+          incomingBox.style.display = 'block';
           setStatus('Incoming call from ' + from);
 
-          // listen for call end
-          call.on('disconnected', () => {
+          // call lifecycle events
+          call.on && call.on('connected', () => setStatus('Call connected'));
+          call.on && call.on('disconnected', () => {
             setStatus('Call disconnected');
-            document.getElementById('incoming').style.display = 'none';
+            incomingBox.style.display = 'none';
             activeCall = null;
-            isMuted = false;
+            muted = false;
           });
-
-          call.on('connected', () => {
-            setStatus('Call connected');
-          });
-
-          call.on('failed', (err) => {
-            setStatus('Call failed: ' + (err && err.message ? err.message : err));
+          call.on && call.on('failed', (err) => {
             console.error('call failed', err);
+            setStatus('Call failed: ' + (err && err.message ? err.message : String(err)));
           });
         });
 
-        // Register the device to allow incoming (this triggers permission prompts)
-        // For v2, Device.register() is the method to enable incoming calls
-        await device.register();
+        // v2: register to receive incoming calls (also triggers mic permissions)
+        if (device.register) {
+          await device.register();
+        } else {
+          console.warn('Device.register() method not present on detected Device; registered anyway if automatic.');
+        }
+
       } catch (err) {
-        console.error(err);
-        setStatus('Initialization error: ' + (err && err.message ? err.message : err));
+        console.error('startDevice error', err);
+        setStatus('Initialization failed: ' + (err && err.message ? err.message : String(err)));
       }
     }
 
-    // Buttons
-    document.getElementById('startBtn').addEventListener('click', async () => {
-      // Must be user gesture — starts AudioContext / mic permission
+    // Buttons handlers
+    startBtn.addEventListener('click', async () => {
+      // must be a user gesture to start audio
       await startDevice();
     });
 
@@ -135,9 +225,9 @@
       try {
         await activeCall.accept();
         setStatus('Call answered');
-        document.getElementById('incoming').style.display = 'none';
+        incomingBox.style.display = 'none';
       } catch (e) {
-        console.error('Answer failed', e);
+        console.error('Answer error', e);
       }
     });
 
@@ -146,7 +236,7 @@
       try {
         activeCall.reject();
         setStatus('Call rejected');
-        document.getElementById('incoming').style.display = 'none';
+        incomingBox.style.display = 'none';
         activeCall = null;
       } catch (e) {
         console.error('Reject failed', e);
@@ -159,9 +249,9 @@
         return;
       }
       try {
-        isMuted = !isMuted;
-        activeCall.mute(isMuted);
-        setStatus(isMuted ? 'Muted' : 'Unmuted');
+        muted = !muted;
+        activeCall.mute && activeCall.mute(muted);
+        setStatus(muted ? 'Muted' : 'Unmuted');
       } catch (e) {
         console.error('Mute toggle failed', e);
       }
