@@ -2,21 +2,23 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Twilio Browser Receiver (auto-detect + DTMF queue)</title>
+  <title>Twilio Browser Receiver (auto-detect + DTMF)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     body{font-family:system-ui,Segoe UI,Roboto,Arial;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f6f8fa;}
-    .card{background:#fff;padding:22px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,0.08);width:460px;text-align:center;}
-    button{padding:10px 16px;border-radius:8px;border:none;background:#0b74de;color:#fff;font-weight:600;cursor:pointer;}
+    .card{background:#fff;padding:22px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,0.08);width:520px;text-align:center;}
+    button{padding:10px 14px;border-radius:8px;border:none;background:#0b74de;color:#fff;font-weight:600;cursor:pointer;}
     #status{margin:12px 0;color:#333;}
     #incoming{display:none;margin-top:12px;}
     #answer, #reject{margin:6px;}
     .small{font-size:13px;color:#666;}
     pre {text-align:left; margin:8px 0; max-height:180px; overflow:auto; background:#f0f3f6; padding:8px; border-radius:6px;}
-    .dtmf{padding:10px;border-radius:8px;border:1px solid #ddd;background:#fff;cursor:pointer}
+    .dtmf{padding:10px;border-radius:8px;border:1px solid #ddd;background:#fff;cursor:pointer;font-weight:600;}
+    #dtmfKeys button{font-size:16px}
+    #dtmfHistory {font-size:13px;}
   </style>
 
-  <!-- Twilio v2 build you use -->
+  <!-- Twilio v2 build (you told me you use this CDN) -->
   <script src="https://unpkg.com/@twilio/voice-sdk@2.16.0/dist/twilio.min.js"></script>
 </head>
 <body>
@@ -45,7 +47,7 @@
     <!-- ===== DTMF keypad ===== -->
     <div id="dtmfWrap" style="margin-top:12px; text-align:center;">
       <div style="margin-bottom:6px; font-size:13px; color:#666;">DTMF keypad — press while a call is active</div>
-      <div id="dtmfKeys" style="display:grid; grid-template-columns:repeat(3,1fr); gap:6px; max-width:260px; margin:0 auto;">
+      <div id="dtmfKeys" style="display:grid; grid-template-columns:repeat(3,1fr); gap:6px; max-width:320px; margin:0 auto;">
         <button class="dtmf" data-digit="1">1</button>
         <button class="dtmf" data-digit="2">2</button>
         <button class="dtmf" data-digit="3">3</button>
@@ -62,10 +64,19 @@
 
       <div style="margin-top:8px;">
         <button id="sendSeq" style="margin-right:8px;">Send sequence</button>
-        <input id="dtmfSeq" placeholder="e.g. 123w45#" style="width:160px;padding:6px;border-radius:6px;border:1px solid #ddd;" />
+        <input id="dtmfSeq" placeholder="e.g. 123w45#" style="width:200px;padding:6px;border-radius:6px;border:1px solid #ddd;" />
       </div>
       <div style="font-size:12px;color:#888;margin-top:6px;">
         Use <code>w</code> to pause (~500ms). Allowed: 0–9, *, #, w.
+      </div>
+    </div>
+
+    <!-- History & manual flush -->
+    <div id="dtmfHistoryWrap" style="margin-top:12px; text-align:left; max-width:320px; margin-left:auto; margin-right:auto;">
+      <div style="font-size:12px;color:#666;margin-bottom:6px;">DTMF history (most recent first)</div>
+      <div id="dtmfHistory" style="background:#fff;padding:8px;border-radius:6px;border:1px solid #eee;max-height:120px;overflow:auto;font-size:13px;color:#333;"></div>
+      <div style="margin-top:6px; text-align:center;">
+        <button id="flushNow" style="margin-top:6px; padding:6px 10px;font-size:13px">Flush now</button>
       </div>
     </div>
 
@@ -77,7 +88,7 @@
   </div>
 
   <script>
-    /***** Helper: detect Twilio Device constructor (same robust auto-detect) *****/
+    /***** Utility & detection *****/
     function detectTwilioDeviceConstructor() {
       const accessPaths = [
         ['window.Twilio', window.Twilio],
@@ -112,7 +123,7 @@
       return { constructor: null, path: null, twilioGlobalSnapshot: snapshot(twilioGlobal) };
     }
 
-    /***** UI refs and state *****/
+    /***** UI refs & state *****/
     const startBtn = document.getElementById('startBtn');
     const incomingBox = document.getElementById('incoming');
     const fromLabel = document.getElementById('fromLabel');
@@ -231,14 +242,16 @@
       }
     }
 
-    /***** Answer / reject handlers *****/
+    /***** Answer / reject handlers (keeps queue flush attempts) *****/
     document.getElementById('answer').addEventListener('click', async () => {
       if (!window.activeCall) { setStatus('No incoming call to answer'); return; }
       try {
-        // accept() may be async for some SDKs
         await window.activeCall.accept && window.activeCall.accept();
-        setStatus('Answering… (waiting for connected)');
-        // connected event will flush queue
+        setStatus('Answering… waiting for connected');
+        addHistory('Answer pressed — waiting to flush queued DTMF');
+        scheduleAutoFlush();
+        setTimeout(() => { try { flushDtmfQueue(); } catch(e){console.error(e);} }, 600);
+        setTimeout(() => { try { flushDtmfQueue(); } catch(e){console.error(e);} }, 1400);
       } catch (err) {
         console.error('Accept failed', err);
         setStatus('Answer failed: ' + (err && err.message ? err.message : err));
@@ -253,6 +266,7 @@
         window.activeCall = null;
         incomingBox.style.display = 'none';
         window._dtmfQueue = [];
+        addHistory('Call rejected — cleared queue');
       } catch (err) {
         console.error('Reject failed', err);
         setStatus('Reject failed: ' + (err && err.message ? err.message : err));
@@ -271,60 +285,115 @@
       }
     });
 
-    /***** DTMF handling: queueing & sending *****/
-    function sendDigitsOrQueue(digits) {
-      const call = window.activeCall;
-      if (!call) {
-        logDebug('No active call — queueing digits:', digits);
-        window._dtmfQueue.push(digits);
-        setStatus('Queued DTMF: ' + digits);
-        return;
-      }
+    /***** DTMF handling: immediate attempts, queueing & flushing *****/
+    function addHistory(msg) {
+      try {
+        const el = document.getElementById('dtmfHistory');
+        const line = document.createElement('div');
+        line.style.borderBottom = '1px dashed #eee';
+        line.style.padding = '6px 0';
+        line.textContent = new Date().toLocaleTimeString() + ' — ' + msg;
+        el.insertBefore(line, el.firstChild);
+      } catch(e){ console.debug('history error', e); }
+    }
 
-      // Determine connection status (SDKs vary)
-      const status = (typeof call.state === 'function') ? call.state() : (call.status || call._status || null);
-      const isConnected = (status === 'connected' || status === 'open' || status === 'connected');
-
-      if (!isConnected) {
-        logDebug('Call not connected yet — queueing digits:', digits, 'status:', status);
-        window._dtmfQueue.push(digits);
-        setStatus('Queued DTMF: ' + digits);
-        return;
-      }
-
+    function trySendNow(call, digits) {
+      if (!call) return false;
       try {
         if (typeof call.sendDigits === 'function') {
           call.sendDigits(String(digits));
-          logDebug('Sent DTMF via sendDigits:', digits);
-          setStatus('Sent DTMF: ' + digits);
-        } else if (typeof call.dtmf === 'function') {
+          addHistory('Sent (sendDigits): ' + digits);
+          console.debug('Sent DTMF via sendDigits:', digits);
+          return true;
+        }
+        if (typeof call.dtmf === 'function') {
           call.dtmf(String(digits));
-          logDebug('Sent DTMF via dtmf():', digits);
-          setStatus('Sent DTMF: ' + digits);
-        } else if (typeof call.sendTone === 'function') {
+          addHistory('Sent (dtmf): ' + digits);
+          console.debug('Sent DTMF via dtmf():', digits);
+          return true;
+        }
+        if (typeof call.sendTone === 'function') {
           call.sendTone(String(digits));
-          logDebug('Sent DTMF via sendTone():', digits);
-          setStatus('Sent DTMF: ' + digits);
-        } else {
-          logDebug('No DTMF method on call object; cannot send', call);
-          setStatus('DTMF not supported by this call object');
+          addHistory('Sent (sendTone): ' + digits);
+          console.debug('Sent DTMF via sendTone():', digits);
+          return true;
+        }
+        if (typeof call._sendDigits === 'function') {
+          call._sendDigits(String(digits));
+          addHistory('Sent (_sendDigits): ' + digits);
+          console.debug('Sent DTMF via _sendDigits:', digits);
+          return true;
         }
       } catch (err) {
-        console.error('Error sending DTMF:', err);
-        setStatus('DTMF send failed: ' + (err && err.message ? err.message : err));
+        console.warn('Immediate send attempted but threw, will queue:', err);
+      }
+      return false;
+    }
+
+    function sendDigitsOrQueue(digits) {
+      const call = window.activeCall;
+      if (!call) {
+        window._dtmfQueue.push(digits);
+        addHistory('Queued (no call): ' + digits);
+        setStatus('Queued DTMF: ' + digits);
+        scheduleAutoFlush();
+        return;
+      }
+
+      const status = (typeof call.state === 'function') ? call.state() : (call.status || call._status || call.connectionState || null);
+      const isConnected = (status === 'connected' || status === 'open' || status === 'established' || status === 'connected');
+
+      if (isConnected) {
+        const ok = trySendNow(call, digits);
+        if (ok) { setStatus('Sent DTMF: ' + digits); return; }
+        window._dtmfQueue.push(digits);
+        addHistory('Queued (send method missing): ' + digits);
+        setStatus('Queued DTMF: ' + digits);
+        scheduleAutoFlush();
+        return;
+      } else {
+        const attempted = trySendNow(call, digits);
+        if (attempted) { setStatus('Sent DTMF (attempt): ' + digits); return; }
+        window._dtmfQueue.push(digits);
+        addHistory('Queued (not connected): ' + digits);
+        setStatus('Queued DTMF: ' + digits);
+        scheduleAutoFlush();
+        return;
       }
     }
 
     function flushDtmfQueue() {
       if (!window._dtmfQueue || window._dtmfQueue.length === 0) return;
-      logDebug('Flushing DTMF queue:', window._dtmfQueue);
-      while (window._dtmfQueue.length) {
-        const seq = window._dtmfQueue.shift();
-        try { sendDigitsOrQueue(seq); } catch (e) { console.error('Failed flushing DTMF seq', seq, e); }
+      const call = window.activeCall;
+      for (let i = 0; i < window._dtmfQueue.length; i++) {
+        const seq = window._dtmfQueue[i];
+        const attempted = trySendNow(call, seq);
+        if (attempted) {
+          addHistory('Flushed & Sent: ' + seq);
+        } else {
+          console.debug('Could not send queued seq now:', seq);
+        }
       }
+      const remaining = [];
+      for (const seq of window._dtmfQueue) {
+        const callNow = window.activeCall;
+        const couldSend = callNow && (typeof callNow.sendDigits === 'function' || typeof callNow.dtmf === 'function' || typeof callNow.sendTone === 'function' || typeof callNow._sendDigits === 'function');
+        if (!couldSend) remaining.push(seq);
+      }
+      window._dtmfQueue = remaining;
+      setStatus('Flushed queued DTMF (remaining: ' + window._dtmfQueue.length + ')');
     }
 
-    // Keypad wiring (uses sendDigitsOrQueue)
+    let _flushTimeouts = [];
+    function scheduleAutoFlush() {
+      _flushTimeouts.forEach(t => clearTimeout(t));
+      _flushTimeouts = [];
+      _flushTimeouts.push(setTimeout(() => { try { flushDtmfQueue(); } catch(e){console.error(e);} }, 400));
+      _flushTimeouts.push(setTimeout(() => { try { flushDtmfQueue(); } catch(e){console.error(e);} }, 900));
+      _flushTimeouts.push(setTimeout(() => { try { flushDtmfQueue(); } catch(e){console.error(e);} }, 1800));
+    }
+
+    // Keypad wiring
     document.querySelectorAll('.dtmf').forEach(btn => {
       btn.addEventListener('click', () => {
         const d = btn.getAttribute('data-digit');
@@ -339,10 +408,16 @@
       sendDigitsOrQueue(seq.replace(/W/g,'w'));
     });
 
+    document.getElementById('flushNow').addEventListener('click', () => {
+      addHistory('Manual flush requested');
+      flushDtmfQueue();
+    });
+
     /***** Start button handler *****/
     startBtn.addEventListener('click', async () => {
       await startDevice();
     });
+
   </script>
 </body>
 </html>
