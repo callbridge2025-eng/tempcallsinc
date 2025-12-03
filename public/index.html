@@ -13,7 +13,9 @@
     #answer, #reject{margin:6px;}
     .small{font-size:13px;color:#666;}
   </style>
-  <script src="https://media.twiliocdn.com/sdk/js/client/v2.0/twilio.min.js"></script>
+
+  <!-- Stable Twilio Client SDK (programmable-voice / Twilio.Device) -->
+  <script src="https://media.twiliocdn.com/sdk/js/client/v1.13/twilio.min.js"></script>
 </head>
 <body>
   <div class="card">
@@ -22,7 +24,7 @@
     <div class="small">Open this page and keep it active. Incoming calls to your Twilio number will ring here.</div>
 
     <div id="incoming">
-      <p><strong>Incoming call</strong></p>
+      <p><strong id="fromLabel">Incoming call</strong></p>
       <div>
         <button id="answer">Answer</button>
         <button id="reject" style="background:#e23b3b">Reject</button>
@@ -35,70 +37,80 @@
   </div>
 
   <script>
-    let device;
-    let currentConnection;
+    let device = null;
+    let currentConnection = null;
+    let isMuted = false;
+
+    function updateStatus(txt) { document.getElementById('status').innerText = txt; }
 
     async function init() {
       updateStatus('Requesting token from server…');
       try {
         const res = await fetch('/token');
         const data = await res.json();
-        if (!data.token) throw new Error('No token returned');
-        const token = data.token;
-        // create Twilio.Device
-        device = new Twilio.Device(token, {
-          // optional options
-          closeProtection: true,
-          debug: false
+        if (!data.token) throw new Error(data.error || 'No token returned from server');
+
+        // Use Twilio.Device.setup for broad SDK compatibility
+        Twilio.Device.setup(data.token);
+
+        // Events
+        Twilio.Device.ready(function(deviceInfo) {
+          device = Twilio.Device;
+          updateStatus('Ready — waiting for calls. (identity: ' + (data.identity || 'browser') + ')');
         });
 
-        device.on('ready', function() {
-          updateStatus('Ready — waiting for calls. (Identity: ' + (data.identity || 'browser') + ')');
+        Twilio.Device.error(function(err) {
+          updateStatus('Device error: ' + (err && err.message ? err.message : err));
+          console.error('Twilio Device error:', err);
         });
 
-        device.on('error', function(err) {
-          updateStatus('Device error: ' + err.message);
-        });
-
-        device.on('incoming', function(conn) {
+        Twilio.Device.connect(function(conn) {
+          // outgoing or connected event
           currentConnection = conn;
-          showIncoming(conn);
+          updateStatus('Call connected');
+          isMuted = false;
         });
 
-        device.on('disconnect', function(conn) {
-          updateStatus('Call disconnected');
-          hideIncoming();
+        Twilio.Device.disconnect(function(conn) {
           currentConnection = null;
+          updateStatus('Call disconnected');
+        });
+
+        Twilio.Device.incoming(function(conn) {
+          currentConnection = conn;
+          const from = conn.parameters && conn.parameters.From ? conn.parameters.From : 'Unknown';
+          document.getElementById('fromLabel').innerText = 'Incoming call from ' + from;
+          document.getElementById('incoming').style.display = 'block';
+          updateStatus('Incoming call from ' + from);
         });
 
       } catch (err) {
-        updateStatus('Initialization error: ' + err.message);
+        updateStatus('Initialization error: ' + (err && err.message ? err.message : err));
+        console.error(err);
       }
-    }
-
-    function updateStatus(txt) { document.getElementById('status').innerText = txt; }
-
-    function showIncoming(conn) {
-      updateStatus('Incoming call from ' + (conn.parameters.From || 'unknown'));
-      document.getElementById('incoming').style.display = 'block';
-    }
-
-    function hideIncoming() {
-      document.getElementById('incoming').style.display = 'none';
     }
 
     document.getElementById('answer').addEventListener('click', function() {
       if (!currentConnection) return;
-      currentConnection.accept();
-      updateStatus('Call answered');
-      hideIncoming();
+      try {
+        currentConnection.accept();
+        updateStatus('Call answered');
+        document.getElementById('incoming').style.display = 'none';
+      } catch (e) {
+        console.error('Answer failed:', e);
+      }
     });
 
     document.getElementById('reject').addEventListener('click', function() {
       if (!currentConnection) return;
-      currentConnection.reject();
-      updateStatus('Call rejected');
-      hideIncoming();
+      try {
+        currentConnection.reject();
+        updateStatus('Call rejected');
+        document.getElementById('incoming').style.display = 'none';
+        currentConnection = null;
+      } catch (e) {
+        console.error('Reject failed:', e);
+      }
     });
 
     document.getElementById('muteToggle').addEventListener('click', function() {
@@ -106,17 +118,16 @@
         updateStatus('No active call to mute/unmute');
         return;
       }
-      const muted = currentConnection.isMuted();
-      if (muted) {
-        currentConnection.mute(false);
-        updateStatus('Unmuted');
-      } else {
-        currentConnection.mute(true);
-        updateStatus('Muted');
+      try {
+        isMuted = !isMuted;
+        currentConnection.mute(isMuted);
+        updateStatus(isMuted ? 'Muted' : 'Unmuted');
+      } catch (e) {
+        console.error('Mute toggle failed:', e);
       }
     });
 
-    // Kick off
+    // start
     init();
   </script>
 </body>
