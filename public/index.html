@@ -2,20 +2,21 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Twilio Browser Receiver (auto-detect)</title>
+  <title>Twilio Browser Receiver (auto-detect + DTMF queue)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     body{font-family:system-ui,Segoe UI,Roboto,Arial;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f6f8fa;}
-    .card{background:#fff;padding:22px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,0.08);width:420px;text-align:center;}
+    .card{background:#fff;padding:22px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,0.08);width:460px;text-align:center;}
     button{padding:10px 16px;border-radius:8px;border:none;background:#0b74de;color:#fff;font-weight:600;cursor:pointer;}
     #status{margin:12px 0;color:#333;}
     #incoming{display:none;margin-top:12px;}
     #answer, #reject{margin:6px;}
     .small{font-size:13px;color:#666;}
     pre {text-align:left; margin:8px 0; max-height:180px; overflow:auto; background:#f0f3f6; padding:8px; border-radius:6px;}
+    .dtmf{padding:10px;border-radius:8px;border:1px solid #ddd;background:#fff;cursor:pointer}
   </style>
 
-  <!-- User-provided CDN (you said you use this) -->
+  <!-- Twilio v2 build you use -->
   <script src="https://unpkg.com/@twilio/voice-sdk@2.16.0/dist/twilio.min.js"></script>
 </head>
 <body>
@@ -40,114 +41,44 @@
     <div style="margin-top:14px">
       <button id="muteToggle">Mute</button>
     </div>
-<!-- ===== DTMF keypad (paste into your page UI) ===== -->
-<div id="dtmfWrap" style="margin-top:12px; text-align:center;">
-  <div style="margin-bottom:6px; font-size:13px; color:#666;">DTMF keypad — press while a call is active</div>
-  <div id="dtmfKeys" style="display:grid; grid-template-columns:repeat(3,1fr); gap:6px; max-width:220px; margin:0 auto;">
-    <!-- row 1 -->
-    <button class="dtmf" data-digit="1">1</button>
-    <button class="dtmf" data-digit="2">2</button>
-    <button class="dtmf" data-digit="3">3</button>
-    <!-- row 2 -->
-    <button class="dtmf" data-digit="4">4</button>
-    <button class="dtmf" data-digit="5">5</button>
-    <button class="dtmf" data-digit="6">6</button>
-    <!-- row 3 -->
-    <button class="dtmf" data-digit="7">7</button>
-    <button class="dtmf" data-digit="8">8</button>
-    <button class="dtmf" data-digit="9">9</button>
-    <!-- row 4 -->
-    <button class="dtmf" data-digit="*">*</button>
-    <button class="dtmf" data-digit="0">0</button>
-    <button class="dtmf" data-digit="#">#</button>
-  </div>
 
-  <div style="margin-top:8px;">
-    <button id="sendSeq" style="margin-right:8px;">Send sequence</button>
-    <input id="dtmfSeq" placeholder="e.g. 123w45#" style="width:140px;padding:6px;border-radius:6px;border:1px solid #ddd;" />
-  </div>
-  <div style="font-size:12px;color:#888;margin-top:6px;">
-    Use <code>w</code> to pause (~500ms). Allowed: 0–9, *, #, w.
-  </div>
-</div>
+    <!-- ===== DTMF keypad ===== -->
+    <div id="dtmfWrap" style="margin-top:12px; text-align:center;">
+      <div style="margin-bottom:6px; font-size:13px; color:#666;">DTMF keypad — press while a call is active</div>
+      <div id="dtmfKeys" style="display:grid; grid-template-columns:repeat(3,1fr); gap:6px; max-width:260px; margin:0 auto;">
+        <button class="dtmf" data-digit="1">1</button>
+        <button class="dtmf" data-digit="2">2</button>
+        <button class="dtmf" data-digit="3">3</button>
+        <button class="dtmf" data-digit="4">4</button>
+        <button class="dtmf" data-digit="5">5</button>
+        <button class="dtmf" data-digit="6">6</button>
+        <button class="dtmf" data-digit="7">7</button>
+        <button class="dtmf" data-digit="8">8</button>
+        <button class="dtmf" data-digit="9">9</button>
+        <button class="dtmf" data-digit="*">*</button>
+        <button class="dtmf" data-digit="0">0</button>
+        <button class="dtmf" data-digit="#">#</button>
+      </div>
 
-<script>
-  // ASSUMPTION: this page defines `activeCall` when a call arrives (as in the page I gave earlier).
-  // This snippet uses activeCall.sendDigits(digit) per Twilio Call API (v2).
-  function sendDigit(d) {
-    if (!window.activeCall) {
-      console.warn('No active call — cannot send DTMF');
-      setStatus && setStatus('No active call to send DTMF');
-      return;
-    }
-    try {
-      // call.sendDigits accepts a string of digits, e.g. '1' or '123#' or '1w2'
-      // Each 'w' causes a 500ms pause.
-      window.activeCall.sendDigits(String(d));
-      setStatus && setStatus('Sent DTMF: ' + d);
-    } catch (err) {
-      console.error('sendDigits failed', err);
-      setStatus && setStatus('DTMF send failed: ' + (err && err.message ? err.message : err));
-    }
-  }
-
-  // wire up keypad buttons
-  document.querySelectorAll('.dtmf').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const d = btn.getAttribute('data-digit');
-      sendDigit(d);
-    });
-  });
-
-  // send sequence textbox + button
-  const sendSeqBtn = document.getElementById('sendSeq');
-  const seqInput = document.getElementById('dtmfSeq');
-  sendSeqBtn.addEventListener('click', () => {
-    const seq = (seqInput.value || '').trim();
-    if (!seq) return;
-    // validate allowed chars quickly
-    if (!/^[0-9*#wW]+$/.test(seq)) {
-      alert('Sequence includes invalid characters. Use 0-9, *, #, w.');
-      return;
-    }
-    // normalize to lowercase w
-    const normalized = seq.replace(/W/g, 'w');
-    sendDigit(normalized);
-  });
-</script>
-
+      <div style="margin-top:8px;">
+        <button id="sendSeq" style="margin-right:8px;">Send sequence</button>
+        <input id="dtmfSeq" placeholder="e.g. 123w45#" style="width:160px;padding:6px;border-radius:6px;border:1px solid #ddd;" />
+      </div>
+      <div style="font-size:12px;color:#888;margin-top:6px;">
+        Use <code>w</code> to pause (~500ms). Allowed: 0–9, *, #, w.
+      </div>
+    </div>
 
     <div style="margin-top:12px">
-      <details><summary>Debug: detected Twilio global (open this and check console)</summary>
+      <details><summary>Debug: detected Twilio global (open and check console)</summary>
         <pre id="twilioDebug">(not loaded yet)</pre>
       </details>
     </div>
   </div>
 
   <script>
-    // Debug helper: detect Twilio export shape and find a Device constructor.
+    /***** Helper: detect Twilio Device constructor (same robust auto-detect) *****/
     function detectTwilioDeviceConstructor() {
-      // Common global names that different bundles expose
-      const candidates = [
-        window.Twilio,
-        window.TwilioVoice,
-        window.TwilioVoiceSDK,
-        window.TwilioClient,
-        window.default,              // unlikely
-        (window.Twilio && window.Twilio.default), // some UMD builds
-        (window.Twilio && window.Twilio.Device),
-        (window.Twilio && window.Twilio.Device && window.Twilio.Device.Device)
-      ];
-
-      // Collect a map of keys available on window for easier debugging
-      const twilioGlobal = window.Twilio || window.TwilioVoice || window.TwilioVoiceSDK || window.TwilioClient || window.Twilio || null;
-
-      // Helper to test an object for a Device-like constructor
-      function looksLikeConstructor(fn) {
-        return typeof fn === 'function';
-      }
-
-      // Try a list of likely access paths
       const accessPaths = [
         ['window.Twilio', window.Twilio],
         ['window.Twilio && window.Twilio.Device', (window.Twilio && window.Twilio.Device)],
@@ -160,50 +91,42 @@
         ['window["@twilio/voice-sdk"] (rare)', window['@twilio/voice-sdk']]
       ];
 
-      // Check each path
+      function looksLikeConstructor(fn) { return typeof fn === 'function'; }
+
+      const twilioGlobal = window.Twilio || window.TwilioVoice || window.TwilioVoiceSDK || window.TwilioClient || window['@twilio/voice-sdk'] || null;
+      function snapshot(obj) {
+        if (!obj) return null;
+        try { return Object.keys(obj).slice(0,50); } catch (e) { return String(obj); }
+      }
+
       for (const [path, val] of accessPaths) {
-        if (looksLikeConstructor(val)) {
-          return { constructor: val, path, twilioGlobalSnapshot: snapshot(twilioGlobal) };
-        }
-        // sometimes Device is a property on the object
+        if (looksLikeConstructor(val)) return { constructor: val, path, twilioGlobalSnapshot: snapshot(twilioGlobal) };
         if (val && typeof val === 'object') {
-          // try .Device
           if (looksLikeConstructor(val.Device)) return { constructor: val.Device, path: path + '.Device', twilioGlobalSnapshot: snapshot(twilioGlobal) };
-          // try default property
           if (looksLikeConstructor(val.default)) return { constructor: val.default, path: path + '.default', twilioGlobalSnapshot: snapshot(twilioGlobal) };
           if (val.default && typeof val.default === 'object' && looksLikeConstructor(val.default.Device)) {
             return { constructor: val.default.Device, path: path + '.default.Device', twilioGlobalSnapshot: snapshot(twilioGlobal) };
           }
         }
       }
-
-      // nothing found — return a descriptive object
       return { constructor: null, path: null, twilioGlobalSnapshot: snapshot(twilioGlobal) };
-
-      function snapshot(obj) {
-        if (!obj) return null;
-        try {
-          // list keys, but not deep values
-          return Object.keys(obj).slice(0,50);
-        } catch (e) {
-          return String(obj);
-        }
-      }
     }
 
-    // UI refs
+    /***** UI refs and state *****/
     const startBtn = document.getElementById('startBtn');
     const incomingBox = document.getElementById('incoming');
     const fromLabel = document.getElementById('fromLabel');
     const statusEl = document.getElementById('status');
     const debugPre = document.getElementById('twilioDebug');
 
-    let device = null;
-    let activeCall = null;
-    let muted = false;
-
     function setStatus(t) { statusEl.innerText = t; }
+    function logDebug(...args) { console.debug('[twilio]', ...args); }
 
+    // global call reference & dtmf queue (used by keypad)
+    window.activeCall = null;
+    window._dtmfQueue = [];
+
+    /***** Token fetcher *****/
     async function fetchToken() {
       const res = await fetch('/token');
       if (!res.ok) {
@@ -214,12 +137,12 @@
       return j.token;
     }
 
+    /***** Start / register device and wire events *****/
     async function startDevice() {
       setStatus('Fetching token…');
       try {
         const token = await fetchToken();
 
-        // Detect constructor
         const detected = detectTwilioDeviceConstructor();
         console.log('Detected Twilio global:', detected.twilioGlobalSnapshot, 'chosen path:', detected.path);
         debugPre.innerText = 'Detected global keys: ' + JSON.stringify(detected.twilioGlobalSnapshot, null, 0) + '\nChosen path: ' + String(detected.path);
@@ -231,57 +154,75 @@
         }
 
         const DeviceCtor = detected.constructor;
-        // Create device instance (v2 usage: new Device(token))
         try {
-          device = new DeviceCtor(token);
+          // instantiate device (v2 style)
+          const device = new DeviceCtor(token);
+          // expose for debugging if needed
+          window._twilioDeviceInstance = device;
+
+          // register events
+          device.on && device.on('registered', () => {
+            setStatus('Ready — waiting for calls.');
+            startBtn.style.display = 'none';
+          });
+
+          device.on && device.on('registrationError', (err) => {
+            console.error('registrationError', err);
+            setStatus('Registration error: ' + (err && err.message ? err.message : String(err)));
+          });
+
+          device.on && device.on('unregistered', () => {
+            setStatus('Device unregistered');
+            startBtn.style.display = '';
+          });
+
+          // incoming
+          device.on && device.on('incoming', (call) => {
+            // store call globally so keypad can access and queue can work
+            window.activeCall = call;
+            logDebug('Incoming call object set to window.activeCall', call);
+
+            const from = call.parameters && call.parameters.From ? call.parameters.From : 'Unknown';
+            fromLabel.innerText = 'Incoming call from ' + from;
+            incomingBox.style.display = 'block';
+            setStatus('Incoming call from ' + from);
+
+            // wired lifecycle events (ensure we flush queued DTMF once connected)
+            call.on && call.on('connected', () => {
+              logDebug('Call connected event — flushing DTMF queue if any');
+              // keep global ref
+              window.activeCall = call;
+              setStatus('Call connected');
+              flushDtmfQueue();
+            });
+
+            call.on && call.on('disconnected', () => {
+              logDebug('Call disconnected');
+              if (window.activeCall === call) window.activeCall = null;
+              setStatus('Call disconnected');
+              incomingBox.style.display = 'none';
+              window._dtmfQueue = [];
+            });
+
+            call.on && call.on('failed', (err) => {
+              console.error('call failed', err);
+              if (window.activeCall === call) window.activeCall = null;
+              setStatus('Call failed: ' + (err && err.message ? err.message : String(err)));
+              incomingBox.style.display = 'none';
+            });
+          });
+
+          // register device (triggers mic permissions)
+          if (typeof device.register === 'function') {
+            await device.register();
+          } else {
+            console.warn('Device.register() not present; continuing');
+          }
+
         } catch (ctorErr) {
           console.error('Failed constructing Device with detected constructor. Constructor type:', typeof DeviceCtor, DeviceCtor);
-          setStatus('Failed to create Device — constructor invocation threw an error (see console).');
+          setStatus('Failed to create Device — constructor threw (see console).');
           return;
-        }
-
-        // Register event listeners (v2 style)
-        device.on && device.on('registered', () => {
-          setStatus('Ready — waiting for calls.');
-          startBtn.style.display = 'none';
-        });
-
-        device.on && device.on('registrationError', (err) => {
-          console.error('registrationError', err);
-          setStatus('Registration error: ' + (err && err.message ? err.message : String(err)));
-        });
-
-        device.on && device.on('unregistered', () => {
-          setStatus('Device unregistered');
-          startBtn.style.display = '';
-        });
-
-        device.on && device.on('incoming', (call) => {
-          activeCall = call;
-          const from = call.parameters && call.parameters.From ? call.parameters.From : 'Unknown';
-          fromLabel.innerText = 'Incoming call from ' + from;
-          incomingBox.style.display = 'block';
-          setStatus('Incoming call from ' + from);
-
-          // call lifecycle events
-          call.on && call.on('connected', () => setStatus('Call connected'));
-          call.on && call.on('disconnected', () => {
-            setStatus('Call disconnected');
-            incomingBox.style.display = 'none';
-            activeCall = null;
-            muted = false;
-          });
-          call.on && call.on('failed', (err) => {
-            console.error('call failed', err);
-            setStatus('Call failed: ' + (err && err.message ? err.message : String(err)));
-          });
-        });
-
-        // v2: register to receive incoming calls (also triggers mic permissions)
-        if (device.register) {
-          await device.register();
-        } else {
-          console.warn('Device.register() method not present on detected Device; registered anyway if automatic.');
         }
 
       } catch (err) {
@@ -290,47 +231,117 @@
       }
     }
 
-    // Buttons handlers
-    startBtn.addEventListener('click', async () => {
-      // must be a user gesture to start audio
-      await startDevice();
-    });
-
+    /***** Answer / reject handlers *****/
     document.getElementById('answer').addEventListener('click', async () => {
-      if (!activeCall) return;
+      if (!window.activeCall) { setStatus('No incoming call to answer'); return; }
       try {
-        await activeCall.accept();
-        setStatus('Call answered');
-        incomingBox.style.display = 'none';
-      } catch (e) {
-        console.error('Answer error', e);
+        // accept() may be async for some SDKs
+        await window.activeCall.accept && window.activeCall.accept();
+        setStatus('Answering… (waiting for connected)');
+        // connected event will flush queue
+      } catch (err) {
+        console.error('Accept failed', err);
+        setStatus('Answer failed: ' + (err && err.message ? err.message : err));
       }
     });
 
     document.getElementById('reject').addEventListener('click', () => {
-      if (!activeCall) return;
+      if (!window.activeCall) { setStatus('No incoming call to reject'); return; }
       try {
-        activeCall.reject();
+        window.activeCall.reject && window.activeCall.reject();
         setStatus('Call rejected');
+        window.activeCall = null;
         incomingBox.style.display = 'none';
-        activeCall = null;
-      } catch (e) {
-        console.error('Reject failed', e);
+        window._dtmfQueue = [];
+      } catch (err) {
+        console.error('Reject failed', err);
+        setStatus('Reject failed: ' + (err && err.message ? err.message : err));
       }
     });
 
+    /***** Mute toggle *****/
     document.getElementById('muteToggle').addEventListener('click', () => {
-      if (!activeCall) {
-        setStatus('No active call to mute/unmute');
+      if (!window.activeCall) { setStatus('No active call to mute/unmute'); return; }
+      try {
+        window._isMuted = !window._isMuted;
+        window.activeCall.mute && window.activeCall.mute(window._isMuted);
+        setStatus(window._isMuted ? 'Muted' : 'Unmuted');
+      } catch (err) {
+        console.error('Mute toggle failed', err);
+      }
+    });
+
+    /***** DTMF handling: queueing & sending *****/
+    function sendDigitsOrQueue(digits) {
+      const call = window.activeCall;
+      if (!call) {
+        logDebug('No active call — queueing digits:', digits);
+        window._dtmfQueue.push(digits);
+        setStatus('Queued DTMF: ' + digits);
         return;
       }
-      try {
-        muted = !muted;
-        activeCall.mute && activeCall.mute(muted);
-        setStatus(muted ? 'Muted' : 'Unmuted');
-      } catch (e) {
-        console.error('Mute toggle failed', e);
+
+      // Determine connection status (SDKs vary)
+      const status = (typeof call.state === 'function') ? call.state() : (call.status || call._status || null);
+      const isConnected = (status === 'connected' || status === 'open' || status === 'connected');
+
+      if (!isConnected) {
+        logDebug('Call not connected yet — queueing digits:', digits, 'status:', status);
+        window._dtmfQueue.push(digits);
+        setStatus('Queued DTMF: ' + digits);
+        return;
       }
+
+      try {
+        if (typeof call.sendDigits === 'function') {
+          call.sendDigits(String(digits));
+          logDebug('Sent DTMF via sendDigits:', digits);
+          setStatus('Sent DTMF: ' + digits);
+        } else if (typeof call.dtmf === 'function') {
+          call.dtmf(String(digits));
+          logDebug('Sent DTMF via dtmf():', digits);
+          setStatus('Sent DTMF: ' + digits);
+        } else if (typeof call.sendTone === 'function') {
+          call.sendTone(String(digits));
+          logDebug('Sent DTMF via sendTone():', digits);
+          setStatus('Sent DTMF: ' + digits);
+        } else {
+          logDebug('No DTMF method on call object; cannot send', call);
+          setStatus('DTMF not supported by this call object');
+        }
+      } catch (err) {
+        console.error('Error sending DTMF:', err);
+        setStatus('DTMF send failed: ' + (err && err.message ? err.message : err));
+      }
+    }
+
+    function flushDtmfQueue() {
+      if (!window._dtmfQueue || window._dtmfQueue.length === 0) return;
+      logDebug('Flushing DTMF queue:', window._dtmfQueue);
+      while (window._dtmfQueue.length) {
+        const seq = window._dtmfQueue.shift();
+        try { sendDigitsOrQueue(seq); } catch (e) { console.error('Failed flushing DTMF seq', seq, e); }
+      }
+    }
+
+    // Keypad wiring (uses sendDigitsOrQueue)
+    document.querySelectorAll('.dtmf').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const d = btn.getAttribute('data-digit');
+        sendDigitsOrQueue(d);
+      });
+    });
+
+    document.getElementById('sendSeq').addEventListener('click', () => {
+      const seq = (document.getElementById('dtmfSeq').value || '').trim();
+      if (!seq) return;
+      if (!/^[0-9*#wW]+$/.test(seq)) { alert('Invalid characters in sequence'); return; }
+      sendDigitsOrQueue(seq.replace(/W/g,'w'));
+    });
+
+    /***** Start button handler *****/
+    startBtn.addEventListener('click', async () => {
+      await startDevice();
     });
   </script>
 </body>
