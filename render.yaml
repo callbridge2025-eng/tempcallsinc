@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: twilio-browser-receiver
+    env: node
+    repo: https://github.com/your-username/your-repo-name.git   # optional, Render can connect via UI too
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    # plan: starter   # optional: choose via dashboard if you'd like
+    envVars:
+      - key: CLIENT_NAME
+        value: browser
+      # do NOT store secrets here in plain text if you're committing this file publicly.
