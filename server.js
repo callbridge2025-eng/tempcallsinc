@@ -18,32 +18,31 @@ app.get('/', (req, res) => {
 
 // Generate Access Token for the browser to accept calls
 app.get('/token', (req, res) => {
-  /*
-    Required env vars:
-    TWILIO_ACCOUNT_SID
-    TWILIO_API_KEY_SID
-    TWILIO_API_KEY_SECRET
-    TWILIO_TWIML_APP_SID (optional; we can set empty)
-    CLIENT_NAME (optional)
-  */
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const apiKeySid = process.env.TWILIO_API_KEY_SID;
-  const apiKeySecret = process.env.TWILIO_API_KEY_SECRET;
-  const clientName = process.env.CLIENT_NAME || 'browser';
+  try {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const apiKeySid = process.env.TWILIO_API_KEY_SID;
+    const apiKeySecret = process.env.TWILIO_API_KEY_SECRET;
+    const clientName = process.env.CLIENT_NAME || 'browser';
 
-  if (!accountSid || !apiKeySid || !apiKeySecret) {
-    return res.status(500).json({ error: 'TWILIO_ACCOUNT_SID, TWILIO_API_KEY_SID and TWILIO_API_KEY_SECRET must be set in .env' });
+    if (!accountSid || !apiKeySid || !apiKeySecret) {
+      const missing = [
+        !accountSid && 'TWILIO_ACCOUNT_SID',
+        !apiKeySid && 'TWILIO_API_KEY_SID',
+        !apiKeySecret && 'TWILIO_API_KEY_SECRET'
+      ].filter(Boolean).join(', ');
+      console.error('Missing env vars for /token:', missing);
+      return res.status(500).json({ error: `Missing environment variables: ${missing}` });
+    }
+
+    const token = new AccessToken(accountSid, apiKeySid, apiKeySecret, { ttl: 3600 });
+    const voiceGrant = new VoiceGrant({ incomingAllow: true });
+    token.addGrant(voiceGrant);
+    token.identity = clientName;
+    return res.json({ identity: clientName, token: token.toJwt() });
+  } catch (err) {
+    console.error('Error in /token:', err && err.stack ? err.stack : err);
+    return res.status(500).json({ error: 'Internal server error', details: String(err && err.message) });
   }
-
-  const token = new AccessToken(accountSid, apiKeySid, apiKeySecret, { ttl: 3600 });
-  const voiceGrant = new VoiceGrant({
-    // outgoingApplicationSid: process.env.TWILIO_TWIML_APP_SID, // not needed for receiving
-    incomingAllow: true // allow incoming calls
-  });
-  token.addGrant(voiceGrant);
-  token.identity = clientName;
-
-  res.json({ identity: clientName, token: token.toJwt() });
 });
 
 // Twilio webhook for incoming calls
