@@ -40,6 +40,82 @@
     <div style="margin-top:14px">
       <button id="muteToggle">Mute</button>
     </div>
+<!-- ===== DTMF keypad (paste into your page UI) ===== -->
+<div id="dtmfWrap" style="margin-top:12px; text-align:center;">
+  <div style="margin-bottom:6px; font-size:13px; color:#666;">DTMF keypad — press while a call is active</div>
+  <div id="dtmfKeys" style="display:grid; grid-template-columns:repeat(3,1fr); gap:6px; max-width:220px; margin:0 auto;">
+    <!-- row 1 -->
+    <button class="dtmf" data-digit="1">1</button>
+    <button class="dtmf" data-digit="2">2</button>
+    <button class="dtmf" data-digit="3">3</button>
+    <!-- row 2 -->
+    <button class="dtmf" data-digit="4">4</button>
+    <button class="dtmf" data-digit="5">5</button>
+    <button class="dtmf" data-digit="6">6</button>
+    <!-- row 3 -->
+    <button class="dtmf" data-digit="7">7</button>
+    <button class="dtmf" data-digit="8">8</button>
+    <button class="dtmf" data-digit="9">9</button>
+    <!-- row 4 -->
+    <button class="dtmf" data-digit="*">*</button>
+    <button class="dtmf" data-digit="0">0</button>
+    <button class="dtmf" data-digit="#">#</button>
+  </div>
+
+  <div style="margin-top:8px;">
+    <button id="sendSeq" style="margin-right:8px;">Send sequence</button>
+    <input id="dtmfSeq" placeholder="e.g. 123w45#" style="width:140px;padding:6px;border-radius:6px;border:1px solid #ddd;" />
+  </div>
+  <div style="font-size:12px;color:#888;margin-top:6px;">
+    Use <code>w</code> to pause (~500ms). Allowed: 0–9, *, #, w.
+  </div>
+</div>
+
+<script>
+  // ASSUMPTION: this page defines `activeCall` when a call arrives (as in the page I gave earlier).
+  // This snippet uses activeCall.sendDigits(digit) per Twilio Call API (v2).
+  function sendDigit(d) {
+    if (!window.activeCall) {
+      console.warn('No active call — cannot send DTMF');
+      setStatus && setStatus('No active call to send DTMF');
+      return;
+    }
+    try {
+      // call.sendDigits accepts a string of digits, e.g. '1' or '123#' or '1w2'
+      // Each 'w' causes a 500ms pause.
+      window.activeCall.sendDigits(String(d));
+      setStatus && setStatus('Sent DTMF: ' + d);
+    } catch (err) {
+      console.error('sendDigits failed', err);
+      setStatus && setStatus('DTMF send failed: ' + (err && err.message ? err.message : err));
+    }
+  }
+
+  // wire up keypad buttons
+  document.querySelectorAll('.dtmf').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const d = btn.getAttribute('data-digit');
+      sendDigit(d);
+    });
+  });
+
+  // send sequence textbox + button
+  const sendSeqBtn = document.getElementById('sendSeq');
+  const seqInput = document.getElementById('dtmfSeq');
+  sendSeqBtn.addEventListener('click', () => {
+    const seq = (seqInput.value || '').trim();
+    if (!seq) return;
+    // validate allowed chars quickly
+    if (!/^[0-9*#wW]+$/.test(seq)) {
+      alert('Sequence includes invalid characters. Use 0-9, *, #, w.');
+      return;
+    }
+    // normalize to lowercase w
+    const normalized = seq.replace(/W/g, 'w');
+    sendDigit(normalized);
+  });
+</script>
+
 
     <div style="margin-top:12px">
       <details><summary>Debug: detected Twilio global (open this and check console)</summary>
